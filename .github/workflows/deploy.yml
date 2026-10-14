@@ -94,8 +94,8 @@ jobs:
                 ("docker pull " + ($image | @sh)),
                 "docker stop containerized-web-app 2>/dev/null || true",
                 "docker rm containerized-web-app 2>/dev/null || true",
-                ("docker run -d --name containerized-web-app --restart unless-stopped -p 80:3000 " + ($image | @sh)),
-                "for i in $(seq 1 20); do if curl -fsS http://127.0.0.1/health; then exit 0; fi; sleep 3; done",
+                ("docker run -d --name containerized-web-app --restart unless-stopped -p 8000:8000 " + ($image | @sh)),
+                "for i in $(seq 1 20); do if curl -fsS http://127.0.0.8000/health; then exit 0; fi; sleep 3; done",
                 "docker logs --tail 100 containerized-web-app || true",
                 "exit 1"
               ]

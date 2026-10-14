@@ -51,12 +51,43 @@ jobs:
       - name: Checkout source code
         uses: actions/checkout@v4
 
+      # TEMPORARY DIAGNOSTIC STEP
+      - name: Diagnose GitHub OIDC claims
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const token = await core.getIDToken('sts.amazonaws.com');
+
+            const payload = JSON.parse(
+              Buffer.from(token.split('.')[1], 'base64url').toString()
+            );
+
+            core.info('----- GitHub OIDC Diagnostic Claims -----');
+            core.info(`Issuer: ${payload.iss}`);
+            core.info(`Audience: ${JSON.stringify(payload.aud)}`);
+            core.info(`Subject: ${payload.sub}`);
+            core.info(`Repository: ${payload.repository}`);
+            core.info(`Repository owner: ${payload.repository_owner}`);
+            core.info(`Ref: ${payload.ref}`);
+            core.info(`Event name: ${payload.event_name}`);
+            core.info('-----------------------------------------');
+
+            if (
+              payload.iss !== 'https://token.actions.githubusercontent.com' ||
+              ![].concat(payload.aud).includes('sts.amazonaws.com')
+            ) {
+              core.setFailed('Unexpected GitHub OIDC issuer or audience.');
+            }
+
       - name: Configure AWS credentials using OIDC
         uses: aws-actions/configure-aws-credentials@v4
         with:
           role-to-assume: ${{ vars.AWS_ROLE_ARN }}
           aws-region: ${{ vars.AWS_REGION }}
           role-session-name: GitHubActionsDeployment
+
+      - name: Verify AWS identity
+        run: aws sts get-caller-identity
 
       - name: Log in to Amazon ECR
         id: ecr
@@ -68,6 +99,7 @@ jobs:
           IMAGE_TAG: ${{ github.sha }}
         run: |
           set -euo pipefail
+
           IMAGE="$REGISTRY/$ECR_REPOSITORY:$IMAGE_TAG"
 
           docker build --pull -t "$IMAGE" .
@@ -80,7 +112,6 @@ jobs:
         run: |
           set -euo pipefail
 
-          # Build a safely JSON-encoded SSM command.
           jq -n \
             --arg image "$IMAGE" \
             --arg region "$AWS_REGION" \
@@ -95,7 +126,7 @@ jobs:
                 "docker stop containerized-web-app 2>/dev/null || true",
                 "docker rm containerized-web-app 2>/dev/null || true",
                 ("docker run -d --name containerized-web-app --restart unless-stopped -p 8000:8000 " + ($image | @sh)),
-                "for i in $(seq 1 20); do if curl -fsS http://127.0.0.8000/health; then exit 0; fi; sleep 3; done",
+                "for i in $(seq 1 20); do if curl -fsS http://127.0.0.1:8000/health; then exit 0; fi; sleep 3; done",
                 "docker logs --tail 100 containerized-web-app || true",
                 "exit 1"
               ]
@@ -112,7 +143,6 @@ jobs:
 
           echo "SSM command ID: $COMMAND_ID"
 
-          # Wait for the remote command to finish.
           for i in $(seq 1 60); do
             STATUS=$(aws ssm get-command-invocation \
               --region "$AWS_REGION" \
